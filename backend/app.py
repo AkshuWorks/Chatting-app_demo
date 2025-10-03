@@ -6,15 +6,18 @@ import os
 
 app = Flask(__name__)
 
-# Configure CORS
+# Configure CORS - FIXED WITH YOUR ACTUAL FRONTEND URL
 CORS(app, origins=[
-    "https://chat-frontend.onrender.com",
+    "https://chat-frontend-vtyj.onrender.com",  # YOUR ACTUAL FRONTEND
+    "https://chat-frontend-vtyj.onrender.com",
     "http://localhost:8000",
-    "http://127.0.0.1:8000"
+    "http://127.0.0.1:8000",
+    "http://localhost:3000"
 ])
 
-# Database server configuration
-DB_SERVER = os.environ.get('DATABASE_SERVICE_URL', 'http://localhost:5002')
+# Database server configuration - FIXED WITH YOUR ACTUAL DATABASE URL
+DB_SERVER = os.environ.get('DATABASE_SERVICE_URL',
+                           'https://chat-database-service.onrender.com')
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG,

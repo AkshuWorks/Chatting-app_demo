@@ -7,7 +7,15 @@ from datetime import datetime
 import urllib.parse as urlparse
 
 app = Flask(__name__)
-CORS(app)
+
+# FIXED: Add proper CORS for your frontend
+CORS(app, origins=[
+    "https://chat-frontend-vtyj.onrender.com",
+    "https://chat-backend-service-fm6k.onrender.com",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:3000"
+])
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG,
@@ -350,4 +358,5 @@ def db_health_check():
 if __name__ == "__main__":
     print("Starting Database Server on port 5002...")
     init_database()
-    app.run(debug=True, host='0.0.0.0', port=5002, use_reloader=False)
+    port = int(os.environ.get('PORT', 5002))
+    app.run(debug=True, host='0.0.0.0', port=port, use_reloader=False)
