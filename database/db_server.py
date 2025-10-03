@@ -361,6 +361,37 @@ def db_health_check():
         return jsonify({"status": "unhealthy", "service": "Database Server", "error": str(e)}), 500
 
 
+@app.route("/db/test-connection", methods=["GET"])
+def test_connection():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Test a simple query
+        cursor.execute("SELECT version()")
+        version = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM messages")
+        count = cursor.fetchone()[0]
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "status": "success",
+            "database": "PostgreSQL",
+            "version": version,
+            "message_count": count
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "database": "SQLite (fallback)",
+            "error": str(e)
+        }), 500
+
+
 if __name__ == "__main__":
     print("Starting Database Server on port 5002...")
     init_database()
