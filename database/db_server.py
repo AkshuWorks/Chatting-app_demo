@@ -27,29 +27,36 @@ logging.basicConfig(level=logging.DEBUG,
 def get_db_connection():
     database_url = os.environ.get('DATABASE_URL')
 
-    if database_url:
-        # Parse the database URL for Render PostgreSQL
-        url = urlparse.urlparse(database_url)
-        dbname = url.path[1:]
-        user = url.username
-        password = url.password
-        host = url.hostname
-        port = url.port
+    print(f"🔍 DATABASE_URL: {database_url}")  # Debug log
 
-        conn = psycopg2.connect(
-            dbname=dbname,
-            user=user,
-            password=password,
-            host=host,
-            port=port,
-            sslmode='require'
-        )
-        return conn
-    else:
-        # Fallback to local SQLite for development
-        import sqlite3
-        conn = sqlite3.connect('messages.db')
-        return conn
+    if database_url and database_url.startswith('postgres://'):
+        try:
+            # Parse the database URL for Render PostgreSQL
+            url = urlparse.urlparse(database_url)
+            dbname = url.path[1:]
+            user = url.username
+            password = url.password
+            host = url.hostname
+            port = url.port
+
+            conn = psycopg2.connect(
+                dbname=dbname,
+                user=user,
+                password=password,
+                host=host,
+                port=port,
+                sslmode='require'
+            )
+            print("✅ Connected to PostgreSQL")
+            return conn
+        except Exception as e:
+            print(f"❌ PostgreSQL connection failed: {e}")
+
+    # Fallback to SQLite (for development only)
+    print("⚠️ Falling back to SQLite")
+    import sqlite3
+    conn = sqlite3.connect('messages.db')
+    return conn
 
 # ---------------- INITIALIZE DATABASE ----------------
 
