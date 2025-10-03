@@ -27,36 +27,35 @@ logging.basicConfig(level=logging.DEBUG,
 def get_db_connection():
     database_url = os.environ.get('DATABASE_URL')
 
-    print(f"🔍 DATABASE_URL: {database_url}")  # Debug log
+    print(f"🔍 DATABASE_URL: {database_url}")
 
-    if database_url and database_url.startswith('postgres://'):
+    if database_url:
         try:
-            # Parse the database URL for Render PostgreSQL
-            url = urlparse.urlparse(database_url)
-            dbname = url.path[1:]
-            user = url.username
-            password = url.password
-            host = url.hostname
-            port = url.port
+            # Fix the URL format if needed
+            if database_url.startswith('postgresql://'):
+                # URL is already correct
+                fixed_url = database_url
+            elif database_url.startswith('postgres://'):
+                # Convert postgres:// to postgresql://
+                fixed_url = database_url.replace(
+                    'postgres://', 'postgresql://', 1)
+            else:
+                fixed_url = database_url
 
-            conn = psycopg2.connect(
-                dbname=dbname,
-                user=user,
-                password=password,
-                host=host,
-                port=port,
-                sslmode='require'
-            )
-            print("✅ Connected to PostgreSQL")
+            print(f"🔗 Connecting to PostgreSQL: {fixed_url}")
+
+            # Connect using the URL directly
+            conn = psycopg2.connect(fixed_url, sslmode='require')
+            print("✅ Successfully connected to PostgreSQL")
             return conn
+
         except Exception as e:
             print(f"❌ PostgreSQL connection failed: {e}")
+            # Don't fall back to SQLite in production - raise the error
+            raise Exception(f"PostgreSQL connection failed: {str(e)}")
 
-    # Fallback to SQLite (for development only)
-    print("⚠️ Falling back to SQLite")
-    import sqlite3
-    conn = sqlite3.connect('messages.db')
-    return conn
+    # In production, don't fall back to SQLite
+    raise Exception("DATABASE_URL environment variable not set")
 
 # ---------------- INITIALIZE DATABASE ----------------
 
