@@ -1,51 +1,87 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import logging
-import sqlite3
 import os
+import psycopg2
 from datetime import datetime
+import urllib.parse as urlparse
 
 app = Flask(__name__)
 CORS(app)
 
 # Configure logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+logging.basicConfig(level=logging.DEBUG,
+                    format="%(asctime)s [%(levelname)s] %(message)s")
 
-# Database configuration
-DB_DIR = "database"
-DB_PATH = os.path.join(DB_DIR, "messages.db")
+# Database configuration - using Render PostgreSQL
 
+
+def get_db_connection():
+    database_url = os.environ.get('DATABASE_URL')
+
+    if database_url:
+        # Parse the database URL for Render PostgreSQL
+        url = urlparse.urlparse(database_url)
+        dbname = url.path[1:]
+        user = url.username
+        password = url.password
+        host = url.hostname
+        port = url.port
+
+        conn = psycopg2.connect(
+            dbname=dbname,
+            user=user,
+            password=password,
+            host=host,
+            port=port,
+            sslmode='require'
+        )
+        return conn
+    else:
+        # Fallback to local SQLite for development
+        import sqlite3
+        conn = sqlite3.connect('messages.db')
+        return conn
 
 # ---------------- INITIALIZE DATABASE ----------------
-def init_database():
-    """Initialize database directory and table"""
-    try:
-        if not os.path.exists(DB_DIR):
-            os.makedirs(DB_DIR)
-            print(f"[DB] Created database directory: {DB_DIR}")
 
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS messages (
-                    message_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    sender_id TEXT NOT NULL,
-                    receiver_id TEXT NOT NULL,
-                    message_text TEXT NOT NULL,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            conn.commit()
-            print(f"[DB] ✅ Database initialized at: {DB_PATH}")
+
+def init_database():
+    """Initialize database tables"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Create messages table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                message_id SERIAL PRIMARY KEY,
+                sender_id TEXT NOT NULL,
+                receiver_id TEXT NOT NULL,
+                message_text TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Create users table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                password TEXT NOT NULL
+            )
+        """)
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✅ Database tables initialized successfully")
 
     except Exception as e:
-        print(f"[DB] ❌ Error initializing database: {e}")
-
+        print(f"❌ Error initializing database: {e}")
 
 # ---------------- PARSE REQUEST DATA ----------------
+
+
 def parse_request_data(data, required_keys):
     missing_keys = required_keys - data.keys()
     if missing_keys:
@@ -56,8 +92,9 @@ def parse_request_data(data, required_keys):
     print(f"[DB] ✅ Successfully parsed request data: {extracted}")
     return extracted, None
 
+# ---------------- REGISTER FUNCTION (PostgreSQL) ----------------
 
-# ---------------- REGISTER FUNCTION ----------------
+
 @app.route("/db/register", methods=["POST"])
 def register_user():
     try:
@@ -70,34 +107,34 @@ def register_user():
         password = extracted["password"]
         print(f"[DB] 📝 Attempting to register user: {user_id}")
 
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id TEXT PRIMARY KEY,
-                    password TEXT NOT NULL
-                )
-            """)
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-            cursor.execute(
-                "SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-            if cursor.fetchone():
-                print(f"[DB] ⚠️ User {user_id} already exists")
-                return jsonify({"error": "User already exists"}), 400
+        cursor.execute(
+            "SELECT user_id FROM users WHERE user_id = %s", (user_id,))
+        if cursor.fetchone():
+            print(f"[DB] ⚠️ User {user_id} already exists")
+            cursor.close()
+            conn.close()
+            return jsonify({"error": "User already exists"}), 400
 
-            cursor.execute(
-                "INSERT INTO users (user_id, password) VALUES (?, ?)", (user_id, password))
-            conn.commit()
-            print(f"[DB] ✅ User {user_id} registered successfully")
-            return jsonify({"status": "success", "user_id": user_id}), 201
+        cursor.execute(
+            "INSERT INTO users (user_id, password) VALUES (%s, %s)", (user_id, password))
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        print(f"[DB] ✅ User {user_id} registered successfully")
+        return jsonify({"status": "success", "user_id": user_id}), 201
 
     except Exception as e:
         logging.exception("[DB] Error in register_user")
         print(f"[DB] ❌ Error registering user: {e}")
         return jsonify({"error": "Internal Server Error"}), 500
 
+# ---------------- LOGIN FUNCTION (PostgreSQL) ----------------
 
-# ---------------- LOGIN FUNCTION ----------------
+
 @app.route("/db/login", methods=["POST"])
 def login_user():
     try:
@@ -110,74 +147,65 @@ def login_user():
         password = extracted["password"]
         print(f"[DB] 🔑 Login attempt for user: {user_id}")
 
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT password FROM users WHERE user_id = ?", (user_id,))
-            row = cursor.fetchone()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT password FROM users WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
 
-            if not row:
-                print(f"[DB] ⚠️ User {user_id} not found")
-                return jsonify({"user_id": False, "password": False}), 200
+        if not row:
+            print(f"[DB] ⚠️ User {user_id} not found")
+            return jsonify({"user_id": False, "password": False}), 200
 
-            password_match = row[0] == password
-            print(
-                f"[DB] ✅ Login check for {user_id}: password match = {password_match}")
-            return jsonify({"user_id": True, "password": password_match}), 200
+        password_match = row[0] == password
+        print(
+            f"[DB] ✅ Login check for {user_id}: password match = {password_match}")
+        return jsonify({"user_id": True, "password": password_match}), 200
 
     except Exception as e:
         logging.exception("[DB] Error in login_user")
         print(f"[DB] ❌ Error during login: {e}")
         return jsonify({"error": "Internal Server Error"}), 500
 
+# ---------------- INSERT MESSAGE (PostgreSQL) ----------------
 
-# ---------------- INSERT MESSAGE ----------------
+
 @app.route("/db/insert", methods=["POST"])
 def insert_message():
     try:
         data = request.get_json(force=True)
         logging.info("[DB] Attempting to insert new message")
-        logging.debug(f"[DB] Message data: {data}")
 
         required_keys = {"sender_id", "receiver_id", "message_text"}
         missing_keys = required_keys - data.keys()
         if missing_keys:
-            logging.warning(f"[DB] Missing required fields: {missing_keys}")
             return jsonify({"error": f"Missing fields: {', '.join(missing_keys)}"}), 400
 
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO messages (sender_id, receiver_id, message_text)
-                    VALUES (?, ?, ?)
-                """, (
-                    str(data["sender_id"]),
-                    str(data["receiver_id"]),
-                    str(data["message_text"])
-                ))
-                message_id = cursor.lastrowid
-                conn.commit()
-                print(
-                    f"[DB] ✨ Message inserted successfully with ID: {message_id}")
-                return jsonify({"message_id": message_id, "status": "success"}), 201
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO messages (sender_id, receiver_id, message_text)
+            VALUES (%s, %s, %s)
+            RETURNING message_id
+        """, (data["sender_id"], data["receiver_id"], data["message_text"]))
 
-        except sqlite3.IntegrityError as e:
-            logging.error(f"[DB] Database integrity error: {e}")
-            print(f"[DB] ❌ Database integrity error: {e}")
-            return jsonify({"error": str(e)}), 400
+        message_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
 
-        except Exception as e:
-            logging.error(f"[DB] Database error: {e}")
-            print(f"[DB] ❌ Database error: {e}")
-            return jsonify({"error": "Database error occurred"}), 500
+        print(f"✨ Message inserted successfully with ID: {message_id}")
+        return jsonify({"message_id": message_id, "status": "success"}), 201
 
     except Exception as e:
         logging.exception("[DB] Error in insert_message")
         return jsonify({"error": "Internal Server Error"}), 500
 
+# ---------------- FETCH MESSAGES (PostgreSQL) ----------------
 
-# ---------------- FETCH MESSAGE ----------------
+
 @app.route("/db/fetch", methods=["GET"])
 def fetch_messages():
     try:
@@ -186,100 +214,40 @@ def fetch_messages():
         if not sender_id or not receiver_id:
             return jsonify({"error": "sender_id and receiver_id are required"}), 400
 
-        logging.info(
-            f"[DB] Fetching messages between {sender_id} and {receiver_id}")
-        print(
-            f"\n[DB] 🔍 Searching messages between {sender_id} and {receiver_id}")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT message_id, sender_id, receiver_id, message_text, timestamp
+            FROM messages
+            WHERE (sender_id = %s AND receiver_id = %s) OR (sender_id = %s AND receiver_id = %s)
+            ORDER BY timestamp ASC
+        """, (sender_id, receiver_id, receiver_id, sender_id))
 
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT message_id, sender_id, receiver_id, message_text, timestamp
-                    FROM messages
-                    WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)
-                    ORDER BY timestamp ASC
-                """, (sender_id, receiver_id, receiver_id, sender_id))
-                rows = cursor.fetchall()
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
 
-                messages = [
-                    {
-                        "message_id": row[0],
-                        "sender_id": row[1],
-                        "receiver_id": row[2],
-                        "message_text": row[3],
-                        "timestamp": row[4]
-                    }
-                    for row in rows
-                ]
+        messages = [
+            {
+                "message_id": row[0],
+                "sender_id": row[1],
+                "receiver_id": row[2],
+                "message_text": row[3],
+                "timestamp": row[4].isoformat() if hasattr(row[4], 'isoformat') else row[4]
+            }
+            for row in rows
+        ]
 
-                if not messages:
-                    print("[DB] 📭 No messages found")
-                    return jsonify({"messages": [], "status": "success"}), 200
-
-                print(f"[DB] 📬 Found {len(messages)} messages")
-                return jsonify({"messages": messages, "status": "success"}), 200
-
-        except Exception as e:
-            logging.error(f"[DB] Error fetching messages: {e}")
-            print(f"[DB] ❌ Error fetching messages: {e}")
-            return jsonify({"error": "Database error occurred"}), 500
+        print(f"📬 Found {len(messages)} messages")
+        return jsonify({"messages": messages, "status": "success"}), 200
 
     except Exception as e:
         logging.exception("[DB] Error in fetch_messages")
         return jsonify({"error": "Internal Server Error"}), 500
 
-
-# ---------------- DATABASE HEALTH CHECK ----------------
-@app.route("/db/health", methods=["GET"])
-def db_health_check():
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM messages")
-            count = cursor.fetchone()[0]
-        return jsonify({"status": "healthy", "service": "Database Server", "message_count": count}), 200
-    except Exception as e:
-        return jsonify({"status": "unhealthy", "service": "Database Server", "error": str(e)}), 500
+# ---------------- UPDATE MESSAGE (PostgreSQL) ----------------
 
 
-# ---------------- DELETE MESSAGE ----------------
-@app.route("/db/delete", methods=["DELETE"])
-def delete_message():
-    try:
-        data = request.get_json(force=True)
-        parsed, error = parse_request_data(data, {"message_id", "sender_id"})
-        if error:
-            return jsonify({"error": error}), 400
-
-        message_id = parsed["message_id"]
-        sender_id = parsed["sender_id"]
-        print(
-            f"[DB] 🗑️ Attempting to delete message {message_id} from sender {sender_id}")
-
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                DELETE FROM messages
-                WHERE message_id = ? AND sender_id = ?
-            """, (message_id, sender_id))
-
-            if cursor.rowcount == 0:
-                print(
-                    f"[DB] ⚠️ Message {message_id} not found or sender mismatch")
-                return jsonify({"error": "Message not found or sender mismatch"}), 404
-
-            conn.commit()
-            print(f"[DB] ✅ Successfully deleted message {message_id}")
-            return jsonify({"status": "success", "deleted_id": message_id}), 200
-
-    except Exception as e:
-        logging.exception("[DB] Error deleting message")
-        print(f"[DB] ❌ Error deleting message: {e}")
-        return jsonify({"error": "Internal Server Error"}), 500
-
-
-# ---------------- UPDATE MESSAGE ----------------
 @app.route("/db/update", methods=["PUT"])
 def update_message():
     try:
@@ -295,30 +263,91 @@ def update_message():
         print(
             f"[DB] ✏️ Attempting to update message {message_id} from sender {sender_id}")
 
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE messages
-                SET message_text = ?
-                WHERE message_id = ? AND sender_id = ?
-            """, (new_text, message_id, sender_id))
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE messages
+            SET message_text = %s
+            WHERE message_id = %s AND sender_id = %s
+        """, (new_text, message_id, sender_id))
 
-            if cursor.rowcount == 0:
-                print(
-                    f"[DB] ⚠️ Message {message_id} not found or sender mismatch")
-                return jsonify({"error": "Message not found or sender mismatch"}), 404
+        if cursor.rowcount == 0:
+            print(f"[DB] ⚠️ Message {message_id} not found or sender mismatch")
+            cursor.close()
+            conn.close()
+            return jsonify({"error": "Message not found or sender mismatch"}), 404
 
-            conn.commit()
-            print(f"[DB] ✅ Successfully updated message {message_id}")
-            return jsonify({"status": "success", "updated_id": message_id}), 200
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        print(f"[DB] ✅ Successfully updated message {message_id}")
+        return jsonify({"status": "success", "updated_id": message_id}), 200
 
     except Exception as e:
         logging.exception("[DB] Error updating message")
         print(f"[DB] ❌ Error updating message: {e}")
         return jsonify({"error": "Internal Server Error"}), 500
 
+# ---------------- DELETE MESSAGE (PostgreSQL) ----------------
+
+
+@app.route("/db/delete", methods=["DELETE"])
+def delete_message():
+    try:
+        data = request.get_json(force=True)
+        parsed, error = parse_request_data(data, {"message_id", "sender_id"})
+        if error:
+            return jsonify({"error": error}), 400
+
+        message_id = parsed["message_id"]
+        sender_id = parsed["sender_id"]
+        print(
+            f"[DB] 🗑️ Attempting to delete message {message_id} from sender {sender_id}")
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            DELETE FROM messages
+            WHERE message_id = %s AND sender_id = %s
+        """, (message_id, sender_id))
+
+        if cursor.rowcount == 0:
+            print(f"[DB] ⚠️ Message {message_id} not found or sender mismatch")
+            cursor.close()
+            conn.close()
+            return jsonify({"error": "Message not found or sender mismatch"}), 404
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        print(f"[DB] ✅ Successfully deleted message {message_id}")
+        return jsonify({"status": "success", "deleted_id": message_id}), 200
+
+    except Exception as e:
+        logging.exception("[DB] Error deleting message")
+        print(f"[DB] ❌ Error deleting message: {e}")
+        return jsonify({"error": "Internal Server Error"}), 500
+
+# ---------------- DATABASE HEALTH CHECK ----------------
+
+
+@app.route("/db/health", methods=["GET"])
+def db_health_check():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM messages")
+        count = cursor.fetchone()[0]
+        cursor.close()
+        conn.close()
+        return jsonify({"status": "healthy", "service": "Database Server", "message_count": count}), 200
+    except Exception as e:
+        return jsonify({"status": "unhealthy", "service": "Database Server", "error": str(e)}), 500
+
 
 if __name__ == "__main__":
     print("Starting Database Server on port 5002...")
     init_database()
-    app.run(debug=True, port=5002, use_reloader=False)
+    app.run(debug=True, host='0.0.0.0', port=5002, use_reloader=False)
